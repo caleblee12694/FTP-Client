@@ -3,6 +3,18 @@ import socket
 import ssl
 import json
 import argparse
+import urllib.parse
+
+def connectToServer(host, port):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
+        s = context.wrap_socket(s, server_hostname=host)
+        s.connect((host, port))
+        return s
+    except Exception as e:
+        print(f'Error connecting to server: {e}')
+        return None
 
 def main():
     parser = argparse.ArgumentParser()
