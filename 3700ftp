@@ -168,8 +168,6 @@ def main():
     path = url.path
     client = None
 
-    print(port)
-
     if url.scheme != 'ftp':
         print('Invalid URL: FTP URL not found.')
         return
@@ -182,8 +180,6 @@ def main():
     if not code.startswith("2"):
         print(response)
         return
-    else:
-        print(response)
     
     client.sendUser(user)
 
