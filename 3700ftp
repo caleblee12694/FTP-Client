@@ -1,34 +1,247 @@
 #!/usr/bin/env python3
 import socket
-import ssl
-import json
 import argparse
-import urllib.parse
+import os
+from urllib.parse import urlparse
 
-def connectToServer(host, port):
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        context = ssl.create_default_context(ssl.Purpose.SERVER_AUTH)
-        s = context.wrap_socket(s, server_hostname=host)
-        s.connect((host, port))
-        return s
-    except Exception as e:
-        print(f'Error connecting to server: {e}')
-        return None
+# FTP Client class that holds all the methods to interact with the server
+# and send FTP messages
+class FTPClient:
+    def __init__(self, host, port=21):
+        self.host = host
+        self.port = port
+        self.control = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.data = None
+    
+    # Connects to the server
+    def connectToServer(self):
+        try:
+            self.control.connect((self.host, self.port))
+            return self.get_response()
+        except Exception as e:
+            print(f'Error connecting to the server: {e}')
+            return None
+    
+    # Sends a given request and returns the response
+    def send_req(self, req):
+        self.control.sendall(f'{req}\r\n'.encode())
+        return self.get_response()
+    
+    # Receives the responds and returns the decoded message
+    def get_response(self):
+        return self.control.recv(4096).decode('utf-8')
+    
+    # Receives the data from the data socket
+    def get_data(self):
+        data = []
+        while True:
+            block = self.data.recv(4096)
+            if not block:
+                break
+            data.append(block)
+        return b''.join(data)
+    
+    # Sends the username TCP message
+    def sendUser(self, user):
+        return self.send_req(f'USER {user}')
+    
+    # Sends the password TCP message
+    def sendPass(self, password):
+        return self.send_req(f'PASS {password}')
+    
+    # Sends the remove TCP message
+    def sendRemove(self, path):
+        return self.send_req(f'DELE {path}')
+    
+    # Sends the make directory TCP message
+    def sendMakeDir(self, path):
+        return self.send_req(f'MKD {path}')
+    
+    # Sends the remove directory TCP message
+    def sendRemoveDir(self, path):
+        return self.send_req(f'RMD {path}')
+    
+    # Sends the List TCP message
+    def sendList(self, path):
+        return self.send_req(f'LIST {path}')
+    
+    # Parses a PASV response
+    def parsePasv(self, pasv):
+        parts = pasv.split("(")[1].split(")")[0].split(",")
+        nums = list(map(int, parts))
+        ip_address = '.'.join(map(str, nums[:4]))
+        port = (nums[4] << 8) + nums[5]
 
+        return (ip_address, port)
+    
+    # Sends the PASV TCP message
+    def sendPasv(self):
+        return self.send_req('PASV')
+    
+    # Sets the connection to 8-bit binary data mode
+    def sendType(self):
+        return self.send_req('TYPE I')
+    
+    # Set the connection to stream mode
+    def sendMode(self):
+        return self.send_req('MODE S')
+    
+    # Set the connection to file-oriented mode
+    def sendStru(self):
+        return self.send_req('STRU F')
+    
+    # Sends the STOR TCP message to copy a local file to the remote server
+    def sendStor(self, path):
+        return self.send_req(f'STOR {path}')
+    
+    # Sends the RETR TCP message to retrieve a file from the remote server
+    def sendRetr(self, path):
+        return self.send_req(f'RETR {path}')
+    
+    # Opens the data port and sets the necessary modes to transfer/read files
+    def openData(self, ip, port):
+        self.data = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.data.connect((ip, port))
+        self.sendType()
+        self.sendMode()
+        self.sendStru()
+        return
+    
+    # Downloads a file from the remote server
+    def download(self, localpath, ftp_path):
+        self.sendRetr(ftp_path)
+        with open(localpath, "wb") as f:
+            f.write(self.get_data())
+        return self.get_response()
+    
+    # Uploads a local file to the remote server
+    def upload(self, localpath, ftp_path):
+        with open(localpath, "rb") as f:
+            self.sendStor(ftp_path)
+            self.data.sendall(f.read())
+        self.data.close()
+        return self.get_response()
+
+    # Sents the Quit TCP message to quit the connection
+    def sendQuit(self):
+        return self.send_req('QUIT\r\n')
+
+# Extracts the code from a TCP response
+def get_code(msg):
+    return msg.split(' ', 2)[0]
+
+# Returns True if the argument is a URL, and False if not
+def is_url(url):
+    parsed_url = urlparse(url)
+    return bool(parsed_url.scheme) and bool(parsed_url.netloc)
+
+# Parses arguments and handles all operations with their corresponding arguments
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('op', type=str, help='operation')
     parser.add_argument('arg1', type=str, help='file or url')
-    parser.add_argument('arg2', type=str, help='file or url')
+    parser.add_argument('arg2', nargs='?', type=str, help='file or url')
 
     args = parser.parse_args()
 
+    url = ""
+    urlnum = 0
     op = args.op
-    arg1 = args.arg1
-    arg2 = args.arg2
 
-    print(f'op: {op}, arg1: {arg1}, arg2: {arg2}')
+    if is_url(args.arg1):
+        url = urlparse(args.arg1)
+        urlnum = 1
+    elif is_url(args.arg2):
+        url = urlparse(args.arg2)
+        urlnum = 2
+    
+    user = 'anonymous'
+    password = None
+    host = url.hostname
+    port = 21
+    if url.username != '' and url.username != None:
+        user = url.username
+    if url.password != None:
+        password = url.password
+    if url.port != None:
+        port = url.port
+    path = url.path
+    client = None
 
+    print(port)
+
+    if url.scheme != 'ftp':
+        print('Invalid URL: FTP URL not found.')
+        return
+    
+    client = FTPClient(host, port)
+    response = client.connectToServer()
+
+    # Parsing "Hello" response for code
+    code = response.split(' ', 2)[0]
+    if not code.startswith("2"):
+        print(response)
+        return
+    else:
+        print(response)
+    
+    client.sendUser(user)
+
+    password_response = client.sendPass(password)
+    if not get_code(password_response).startswith("2"):
+        print(password_response)
+        return
+
+    if (op == 'ls'):
+        response = client.sendPasv()
+        (ip, port) = client.parsePasv(response)
+        client.openData(ip, port)
+        client.sendList(path)
+        print(client.get_data().decode('utf-8'))
+        client.sendQuit()
+        return
+    elif (op == 'mkdir'):
+        response = client.sendPasv()
+        (ip, port) = client.parsePasv(response)
+        client.openData(ip, port)
+        print(client.sendMakeDir(path))
+        client.sendQuit()
+        return
+    elif (op == 'rm'):
+        print(client.sendRemove(path))
+        client.sendQuit()
+        return
+    elif (op == 'rmdir'):
+        print(client.sendRemoveDir(path))
+        client.sendQuit()
+        return
+    elif (op == 'cp'):
+        response = client.sendPasv()
+        (ip, port) = client.parsePasv(response)
+        client.openData(ip, port)
+        if urlnum == 1:
+            res = client.download(args.arg2, path)
+            print(res)
+        elif urlnum == 2:
+            res = client.upload(args.arg1, path)
+        client.sendQuit()
+        return
+    elif (op == 'mv'):
+        response = client.sendPasv()
+        (ip, port) = client.parsePasv(response)
+        client.openData(ip, port)
+        if urlnum == 1:
+            client.download(args.arg2, path)
+            client.sendRemove(path)
+        elif urlnum == 2:
+            client.upload(args.arg1, path)
+            os.remove(args.arg1)
+        client.sendQuit()
+        return
+    else:
+        print('operation does not exist!')
+        return
+
+# Main function
 if __name__ == "__main__":
     main()
